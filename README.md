@@ -1,9 +1,20 @@
 # TikTok bot
 
 A private Telegram bot: send it a TikTok link and it sends the video back without the watermark.
-Runs on this PC with [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [aiogram](https://aiogram.dev).
 
-## Setup (once)
+Two versions:
+- **`worker/` (main): runs on Cloudflare Workers**, free, works with the PC off. Reads TikTok's page itself, no yt-dlp.
+- **`bot.py`: runs on this PC** with [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [aiogram](https://aiogram.dev). A backup if TikTok ever changes its page and the Worker breaks.
+
+## Cloudflare version (once)
+
+1. In Telegram, open **@BotFather**, send `/newbot`, pick a name and a username ending in `bot`. Copy the token.
+2. On this PC, right-click `worker/connect.ps1` → *Run with PowerShell*. It sends the token from the clipboard to Cloudflare, connects Telegram to the Worker, and clears the clipboard.
+3. Open your bot in Telegram and send `/start`. The first person to do this becomes the owner; nobody else can use it.
+
+Worker: https://tiktok-bot.didigotreizoo.workers.dev (Telegram posts to `/webhook`, checked with a secret header). Tests: `cd worker && npm test`. Deploy: `npx wrangler deploy`.
+
+## PC version setup (once)
 
 1. In Telegram, open **@BotFather**, send `/newbot`, pick a name and a username ending in `bot`.
 2. Copy the token BotFather gives you.
