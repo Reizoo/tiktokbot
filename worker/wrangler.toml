@@ -1,0 +1,10 @@
+name = "tiktok-bot"
+main = "index.js"
+compatibility_date = "2026-09-01"
+
+# Who may use the bot: the first person to send /start (key "owner").
+[[kv_namespaces]]
+binding = "OWNER"
+id = "0ce1f5f63a6d4c4cb8adb0b32b1e9d41"
+
+# Secrets (set by connect.ps1, never stored in the repo): BOT_TOKEN, WEBHOOK_SECRET
