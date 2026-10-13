@@ -2,3 +2,5 @@
 .env
 owner.json
 __pycache__/
+.wrangler/
+node_modules/
