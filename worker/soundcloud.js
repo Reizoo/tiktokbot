@@ -2,6 +2,8 @@
 // Order of preference: a single MP3 file, an MP3 HLS stream (segments joined), an AAC HLS stream
 // (fMP4 init + segments joined into an .m4a). Telegram's sendAudio takes both MP3 and M4A.
 // DRM-protected (Go+) streams are skipped: they can't be decrypted and we don't try.
+import { rankTracks, downloadable } from "./rank.js";
+
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36";
 const HEADERS = { "User-Agent": UA, Origin: "https://soundcloud.com", Referer: "https://soundcloud.com/" };
 
@@ -77,11 +79,11 @@ export async function fetchSoundCloudById(trackId, kv) {
 export async function searchSoundCloud(query, kv, limit = 8) {
   for (const fresh of [false, true]) {
     const id = await clientId(kv, fresh);
-    const res = await fetch(`https://api-v2.soundcloud.com/search/tracks?q=${encodeURIComponent(query)}&limit=${limit * 2}&client_id=${id}`, { headers: HEADERS });
+    const res = await fetch(`https://api-v2.soundcloud.com/search/tracks?q=${encodeURIComponent(query)}&limit=40&client_id=${id}`, { headers: HEADERS });
     if (!res.ok) continue;
     const { collection = [] } = await res.json();
     return dedupe(
-      collection.filter((t) => t.kind === "track" && t.policy !== "SNIP" && t.policy !== "BLOCK" && (t.media?.transcodings || []).some((x) => !x.snipped)),
+      rankTracks(query, collection.filter((t) => t.kind === "track" && t.policy !== "SNIP" && t.policy !== "BLOCK" && downloadable(t))),
     )
       .slice(0, limit)
       .map((t) => ({ id: String(t.id), title: t.title || "Untitled", performer: t.user?.username || "", duration: Math.round((t.duration || 0) / 1000) }));
