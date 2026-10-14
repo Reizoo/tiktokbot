@@ -9,20 +9,32 @@ export const tokens = (s) => String(s || "").toLowerCase().normalize("NFKC").rep
 export const downloadable = (t) =>
   (t.media?.transcodings || []).some((x) => !x.snipped && !/encrypted/i.test(x.format?.protocol || ""));
 
+// "апфс" for "Автостопом по фазе сна": fans write long artist names as initials, so every multi-word
+// name (uploader, publisher artist, the part of the title before " - ") also counts as its initials.
+function initials(text) {
+  const w = tokens(text);
+  return w.length >= 2 ? [w.map((x) => x[0]).join("")] : [];
+}
+
+function names(t) {
+  const head = String(t.title || "").split(/\s[-–—]\s/)[0];
+  return [t.user?.username, t.publisher_metadata?.artist, head].flatMap((x) => (x ? initials(x) : []));
+}
+
 export function rankTracks(query, tracks) {
   const q = tokens(query);
   const qset = new Set(q);
   return tracks
     .map((t, i) => {
-      const text = new Set(tokens(`${t.title} ${t.user?.username || ""} ${t.publisher_metadata?.artist || ""}`));
+      const text = new Set([...tokens(`${t.title} ${t.user?.username || ""} ${t.publisher_metadata?.artist || ""}`), ...names(t)]);
       const titleWords = new Set(tokens(t.title));
       const matched = q.filter((w) => text.has(w) || [...text].some((x) => x.startsWith(w) && w.length > 2)).length;
       const variant = VARIANTS.some((v) => titleWords.has(v) && !qset.has(v));
-      const artist = tokens(`${t.publisher_metadata?.artist || ""} ${t.user?.username || ""}`);
+      const artist = [...tokens(`${t.publisher_metadata?.artist || ""} ${t.user?.username || ""}`), ...names(t)];
       const official = (t.user?.verified || t.publisher_metadata?.artist) && q.some((w) => artist.includes(w));
       const score =
         (q.length ? matched / q.length : 0) * 3 + // every word of the query found in title or artist
-        Math.log10((t.playback_count || 0) + 1) / 7 - // popularity, 0..~1
+        Math.log10((t.playback_count || 0) + 1) / 3.5 - // popularity, 0..~2: 1.5M plays beats 150
         (variant ? 1.5 : 0) + // speed up / remix / ... that you didn't ask for
         (official ? 0.4 : 0) - // the artist's own upload
         i * 0.01; // SoundCloud's order breaks ties
