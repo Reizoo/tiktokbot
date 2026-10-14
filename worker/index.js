@@ -1,10 +1,12 @@
 // Private Telegram bot on Cloudflare Workers.
 // - TikTok videos and photo slideshows: downloaded here and sent back straight away.
-// - YouTube (videos and Shorts) and SoundCloud: queued in D1; the PC (pc_worker.py, with yt-dlp) picks them up.
+// - SoundCloud: downloaded here too (MP3 when SoundCloud has it, otherwise M4A); falls back to the PC queue.
+// - YouTube (videos and Shorts): queued in D1; the PC (pc_worker.py, with yt-dlp) picks them up.
 // Telegram calls POST /webhook (set up by connect.ps1). Only the owner (first /start) can use the bot.
 // The PC calls GET /pc/jobs and POST /pc/done with the X-PC-Key header.
 import { fetchTikTok } from "./tiktok.js";
 import { findLink } from "./links.js";
+import { fetchSoundCloud } from "./soundcloud.js";
 
 const MAX_BYTES = 49 * 1024 * 1024; // Telegram bots can upload up to 50 MB
 const PC_ONLINE_MS = 30_000; // the PC polls every few seconds; quieter than this means it's off
@@ -43,6 +45,7 @@ async function handle(msg, env) {
   const link = findLink(text);
   if (!link) return say(env, chat, "Send a TikTok, YouTube or SoundCloud link.");
   if (link.kind === "tiktok") return sendTikTok(env, msg, link.url);
+  if (link.kind === "soundcloud") return sendSoundCloud(env, msg, link);
   return queueForPc(env, msg, link);
 }
 
@@ -64,6 +67,29 @@ async function sendTikTok(env, msg, url) {
   } catch (e) {
     console.log("tiktok failed", url, e.message);
     await say(env, chat, "Couldn't download that one. The post may be private or deleted, or TikTok blocked the request. Try again in a minute.");
+  }
+}
+
+async function sendSoundCloud(env, msg, link) {
+  const chat = msg.chat.id;
+  await tg(env, "sendChatAction", { chat_id: chat, action: "upload_voice" });
+  try {
+    const t = await fetchSoundCloud(link.url, env.OWNER);
+    if (t.body.size > MAX_BYTES) return say(env, chat, "That track is over Telegram's 50 MB limit for bots.");
+    const form = new FormData();
+    form.append("chat_id", String(chat));
+    form.append("title", t.title.slice(0, 64));
+    if (t.performer) form.append("performer", t.performer.slice(0, 64));
+    if (t.duration) form.append("duration", String(t.duration));
+    form.append("reply_to_message_id", String(msg.message_id));
+    const name = `${t.performer ? t.performer + " - " : ""}${t.title}`.replace(/[\\/:*?"<>|]+/g, "").slice(0, 80) || "track";
+    form.append("audio", new Blob([t.body], { type: t.mime }), `${name}.${t.ext}`);
+    const res = await upload(env, "sendAudio", form);
+    if (!res.ok) throw new Error(`Telegram refused the audio (HTTP ${res.status})`);
+  } catch (e) {
+    console.log("soundcloud failed", link.url, e.message);
+    if (/preview|DRM|private|deleted|playlists/.test(e.message)) return say(env, chat, `Couldn't download that one: ${e.message}.`);
+    return queueForPc(env, msg, link); // let yt-dlp on the PC have a go
   }
 }
 
