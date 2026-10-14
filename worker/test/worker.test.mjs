@@ -203,6 +203,15 @@ test("inline search lists SoundCloud tracks and the chosen one replaces the plac
   assert.equal(edit.body.inline_message_id, "IM1");
   assert.equal(edit.body.media.media, "FILE5");
 
+  // Second time round the track is already on Telegram: no placeholder, no download.
+  await hook({ inline_query: { id: "q3", from: { id: 111 }, query: "song band" } });
+  const again = calls.filter((c) => c.method === "answerInlineQuery").at(-1).body.results[0];
+  assert.equal(again.audio_file_id, "FILE5");
+  assert.equal(again.audio_url, undefined);
+  const uploads = calls.filter((c) => c.method === "sendAudio").length;
+  await hook({ chosen_inline_result: { result_id: "5", from: { id: 111 }, query: "song band", inline_message_id: "IM2" } });
+  assert.equal(calls.filter((c) => c.method === "sendAudio").length, uploads, "a cached track isn't downloaded again");
+
   await hook({ inline_query: { id: "q2", from: { id: 222 }, query: "song" } });
   assert.equal(calls.filter((c) => c.method === "answerInlineQuery").at(-1).body.results.length, 0, "strangers get nothing");
 
