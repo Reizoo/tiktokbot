@@ -84,6 +84,12 @@ test("search results: the real song beats speed-ups and remixes, DRM-only tracks
   assert.equal(rankTracks("song artist", tracks)[0].title, "Song");
   assert.equal(rankTracks("artist song speed up", tracks)[0].title, "Artist - Song (speed up)", "asked for the speed-up");
   assert.equal(downloadable({ media: { transcodings: [{ snipped: false, format: { protocol: "ctr-encrypted-hls" } }] } }), false);
+  // Artist initials: "апфс" means "Автостопом по фазе сна"; a translated cover by an "апфс" fan account loses.
+  const apfs = [
+    { title: "Автостопом по фазе сна - Песня (на укр)", user: { username: "апфс на укр" }, playback_count: 158, ...hls },
+    { title: "Песня", user: { username: "Автостопом по фазе сна" }, playback_count: 317840, ...hls },
+  ];
+  assert.equal(rankTracks("песня апфс", apfs)[0].user.username, "Автостопом по фазе сна");
 });
 
 test("first /start becomes the owner, others are refused", async () => {
