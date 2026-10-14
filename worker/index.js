@@ -45,7 +45,8 @@ async function handle(msg, env) {
     }
     if (String(from) !== owner) return say(env, chat, "This is a private bot.");
     await refreshSetup(env, chat);
-    return say(env, chat, "Send me a link and I'll send the file back:\n• TikTok videos (no watermark) and photo slideshows\n• YouTube videos and Shorts\n• SoundCloud tracks\n\nYouTube and SoundCloud are downloaded on the PC, so they only work while it's on.");
+    const where = env.LOCAL_DOWNLOAD ? "" : "\n\nYouTube is downloaded on the PC, so it only works while the PC is on.";
+    return say(env, chat, `Send me a link and I'll send the file back:\n• TikTok videos (no watermark) and photo slideshows\n• SoundCloud tracks\n• YouTube videos and Shorts\n\nOr type @ and my name in any chat to search SoundCloud.${where}`);
   }
   if (!owner || String(from) !== owner) return say(env, chat, "This is a private bot.");
 
@@ -136,6 +137,7 @@ async function sendSlideshow(env, msg, post) {
 }
 
 async function queueForPc(env, msg, link) {
+  if (env.LOCAL_DOWNLOAD) return env.LOCAL_DOWNLOAD(msg, link); // the server version downloads YouTube itself
   const chat = msg.chat.id;
   await env.DB.prepare("INSERT INTO jobs (chat_id, reply_to, url, kind, created_at) VALUES (?, ?, ?, ?, ?)")
     .bind(chat, msg.message_id, link.url, link.kind, Date.now())
@@ -174,7 +176,15 @@ async function inlineSearch(q, env, origin) {
   try {
     const tracks = await searchSoundCloud(query, env.OWNER, 8);
     // Tracks sent before are already on Telegram's servers: those go out straight away, no placeholder.
+    // The server version (env.PREFETCH) also downloads the top results while you type, and then lists
+    // only tracks that are ready; the Worker can't (50 requests per call), so it falls back to placeholders.
+    if (env.PREFETCH) await env.PREFETCH(tracks, q);
     const cached = await Promise.all(tracks.map((t) => env.OWNER.get(`fid:${t.id}`)));
+    if (env.PREFETCH && cached.some(Boolean)) {
+      return answer(
+        tracks.flatMap((t, i) => (cached[i] ? [{ type: "audio", id: t.id, audio_file_id: cached[i], reply_markup: SEARCH_AGAIN }] : [])),
+      );
+    }
     return answer(
       tracks.map((t, i) =>
         cached[i]
@@ -289,3 +299,6 @@ function tg(env, method, payload) {
 function upload(env, method, form) {
   return fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/${method}`, { method: "POST", body: form });
 }
+
+// The server version (server/bot.mjs) runs the same handlers with long polling instead of a webhook.
+export { handle, inlineSearch, inlineChosen, tg, say, upload, addArtwork, MAX_BYTES };
