@@ -7,6 +7,7 @@ import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import worker from "../index.js";
 import { findLink } from "../links.js";
+import { rankTracks, downloadable } from "../rank.js";
 
 const VIDEO = "https://www.tiktok.com/@tiktok/video/7694797676306615583";
 const realFetch = globalThis.fetch;
@@ -71,6 +72,18 @@ test("links are sorted by service", () => {
   assert.equal(findLink("https://soundcloud.com/artist/track").kind, "soundcloud");
   assert.equal(findLink("https://on.soundcloud.com/xyz").kind, "soundcloud");
   assert.equal(findLink("hello"), null);
+});
+
+test("search results: the real song beats speed-ups and remixes, DRM-only tracks are dropped", () => {
+  const hls = { media: { transcodings: [{ snipped: false, format: { protocol: "hls" } }] } };
+  const tracks = [
+    { title: "Artist - Song (speed up)", user: { username: "fan" }, playback_count: 3000, ...hls },
+    { title: "Artist - Song [someone remix]", user: { username: "dj" }, playback_count: 9000, ...hls },
+    { title: "Song", user: { username: "Artist", verified: true }, publisher_metadata: { artist: "Artist" }, playback_count: 2800000, ...hls },
+  ];
+  assert.equal(rankTracks("song artist", tracks)[0].title, "Song");
+  assert.equal(rankTracks("artist song speed up", tracks)[0].title, "Artist - Song (speed up)", "asked for the speed-up");
+  assert.equal(downloadable({ media: { transcodings: [{ snipped: false, format: { protocol: "ctr-encrypted-hls" } }] } }), false);
 });
 
 test("first /start becomes the owner, others are refused", async () => {
