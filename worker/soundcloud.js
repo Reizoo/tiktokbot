@@ -41,12 +41,18 @@ async function joinHls(m3u8Url) {
   const init = list.match(/#EXT-X-MAP:URI="([^"]+)"/);
   if (init) parts.push(new URL(init[1], base).href);
   for (const line of list.split("\n")) if (line && !line.startsWith("#")) parts.push(new URL(line.trim(), base).href);
-  const chunks = [];
-  for (const p of parts) {
-    const r = await fetch(p, { headers: HEADERS });
-    if (!r.ok) throw new Error(`segment failed (HTTP ${r.status})`);
-    chunks.push(new Uint8Array(await r.arrayBuffer()));
-  }
+  // Fetch segments 6 at a time (Cloudflare's limit for open connections), keeping their order.
+  const chunks = new Array(parts.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < parts.length) {
+      const i = next++;
+      const r = await fetch(parts[i], { headers: HEADERS });
+      if (!r.ok) throw new Error(`segment failed (HTTP ${r.status})`);
+      chunks[i] = new Uint8Array(await r.arrayBuffer());
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(6, parts.length) }, worker));
   return new Blob(chunks);
 }
 
