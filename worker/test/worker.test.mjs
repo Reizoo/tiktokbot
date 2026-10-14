@@ -155,6 +155,57 @@ test("YouTube links are queued for the PC, which claims and finishes them", asyn
   assert.equal(env.DB.raw.prepare("SELECT status FROM jobs WHERE id = ?").get(first.jobs[0].id).status, "done");
 });
 
+test("inline search lists SoundCloud tracks and the chosen one replaces the placeholder", async () => {
+  const sc = (u) => {
+    if (u === "https://soundcloud.com/") return new Response('<script crossorigin src="https://a-v2.sndcdn.com/assets/app.js"></script>');
+    if (u.startsWith("https://a-v2.sndcdn.com/")) return new Response('x={client_id:"abcdefghijklmnopqrstuvwxyz123456"}');
+    if (u.startsWith("https://api-v2.soundcloud.com/search/tracks")) return Response.json({ collection: [
+      { kind: "track", id: 5, title: "Song", user: { username: "Band" }, duration: 61000, policy: "ALLOW", media: { transcodings: [{ snipped: false }] } },
+      { kind: "track", id: 6, title: "Preview only", user: { username: "Go" }, duration: 30000, policy: "SNIP", media: { transcodings: [{ snipped: true }] } },
+    ] });
+    if (u.startsWith("https://api-v2.soundcloud.com/tracks/5")) return Response.json({
+      kind: "track", title: "Song", user: { username: "Band" }, duration: 61000, track_authorization: "t",
+      media: { transcodings: [{ url: "https://api-v2.soundcloud.com/media/5/mp3", preset: "mp3_1_0", snipped: false, format: { protocol: "progressive", mime_type: "audio/mpeg" } }] },
+    });
+    if (u.startsWith("https://api-v2.soundcloud.com/media/")) return Response.json({ url: "https://cf-media.example/5.mp3" });
+    if (u === "https://cf-media.example/5.mp3") return new Response(new Uint8Array(2048));
+  };
+  const { calls, env } = setup(sc);
+  // Telegram answers sendAudio with the uploaded file's id.
+  const tgFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).endsWith("/sendAudio")) { await tgFetch(url, init); return Response.json({ ok: true, result: { message_id: 99, audio: { file_id: "FILE5" } } }); }
+    return tgFetch(url, init);
+  };
+  await send(env, 111, "/start");
+  const hook = (update) => {
+    const waits = [];
+    return worker.fetch(new Request("https://w/webhook", { method: "POST", headers: { "X-Telegram-Bot-Api-Secret-Token": "s" }, body: JSON.stringify(update) }), env, { waitUntil: (p) => waits.push(p) }).then(() => Promise.all(waits));
+  };
+
+  await hook({ inline_query: { id: "q1", from: { id: 111 }, query: "song band" } });
+  const answer = calls.find((c) => c.method === "answerInlineQuery");
+  assert.equal(answer.body.results.length, 1, "the preview-only track is left out");
+  assert.equal(answer.body.results[0].id, "5");
+  assert.equal(answer.body.results[0].audio_url, "https://w/placeholder.mp3");
+  assert.ok(answer.body.results[0].reply_markup, "a keyboard is needed for inline_message_id");
+
+  await hook({ chosen_inline_result: { result_id: "5", from: { id: 111 }, query: "song band", inline_message_id: "IM1" } });
+  const up = calls.find((c) => c.method === "sendAudio");
+  assert.equal(up.body.chat_id, "111");
+  assert.equal(up.body.audio, 2048);
+  assert.ok(calls.find((c) => c.method === "deleteMessage" && c.body.message_id === 99), "the helper upload is deleted");
+  const edit = calls.find((c) => c.method === "editMessageMedia");
+  assert.equal(edit.body.inline_message_id, "IM1");
+  assert.equal(edit.body.media.media, "FILE5");
+
+  await hook({ inline_query: { id: "q2", from: { id: 222 }, query: "song" } });
+  assert.equal(calls.filter((c) => c.method === "answerInlineQuery").at(-1).body.results.length, 0, "strangers get nothing");
+
+  const ph = await worker.fetch(new Request("https://w/placeholder.mp3"), env, { waitUntil() {} });
+  assert.equal(ph.headers.get("content-type"), "audio/mpeg");
+});
+
 test("wrong secrets are rejected", async () => {
   const { env } = setup();
   const hook = await worker.fetch(new Request("https://w/webhook", { method: "POST", body: "{}" }), env, { waitUntil() {} });
