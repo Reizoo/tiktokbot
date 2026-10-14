@@ -44,6 +44,7 @@ async function handle(msg, env) {
       await env.OWNER.put("owner", owner);
     }
     if (String(from) !== owner) return say(env, chat, "This is a private bot.");
+    await refreshSetup(env, chat);
     return say(env, chat, "Send me a link and I'll send the file back:\n• TikTok videos (no watermark) and photo slideshows\n• YouTube videos and Shorts\n• SoundCloud tracks\n\nYouTube and SoundCloud are downloaded on the PC, so they only work while it's on.");
   }
   if (!owner || String(from) !== owner) return say(env, chat, "This is a private bot.");
@@ -141,6 +142,21 @@ async function queueForPc(env, msg, link) {
   const seen = Number((await env.DB.prepare("SELECT value FROM meta WHERE key = 'pc_seen'").first())?.value || 0);
   const online = Date.now() - seen < PC_ONLINE_MS;
   await say(env, chat, online ? "Downloading on the PC…" : "The PC is off. I'll send it as soon as it's back on.");
+}
+
+// /start from the owner re-registers the webhook with every update type the bot uses (an older
+// connect.ps1 only asked for messages) and checks that inline mode is switched on in @BotFather.
+async function refreshSetup(env, chat) {
+  const hook = await (await tg(env, "getWebhookInfo", {})).json();
+  const wanted = ["message", "inline_query", "chosen_inline_result"];
+  const have = hook.result?.allowed_updates || ["message"];
+  if (hook.result?.url && wanted.some((u) => !have.includes(u))) {
+    await tg(env, "setWebhook", { url: hook.result.url, secret_token: env.WEBHOOK_SECRET, allowed_updates: wanted });
+  }
+  const me = await (await tg(env, "getMe", {})).json();
+  if (!me.result?.supports_inline_queries) {
+    await say(env, chat, "Inline search is off. In @BotFather send /setinline, pick this bot and type a hint like \"track name\". Then /setinlinefeedback, pick the bot and choose Enabled. After that, send /start here again.");
+  }
 }
 
 // ---------- inline mode ----------
