@@ -112,7 +112,31 @@ test("a TikTok slideshow comes back as albums of 10 plus the sound", async () =>
   assert.equal(audio.body.title, "song");
 });
 
-test("YouTube and SoundCloud links are queued for the PC, which claims and finishes them", async () => {
+test("a SoundCloud track comes back as audio, joined from its HLS segments", async () => {
+  const { calls, env } = setup((u) => {
+    if (u === "https://soundcloud.com/") return new Response('<script crossorigin src="https://a-v2.sndcdn.com/assets/app.js"></script>');
+    if (u.startsWith("https://a-v2.sndcdn.com/")) return new Response('x={client_id:"abcdefghijklmnopqrstuvwxyz123456"}');
+    if (u.startsWith("https://api-v2.soundcloud.com/resolve")) return Response.json({
+      kind: "track", title: "Song", user: { username: "Band" }, duration: 61000, track_authorization: "t",
+      media: { transcodings: [{ url: "https://api-v2.soundcloud.com/media/1/aac", preset: "aac_96k", snipped: false, format: { protocol: "hls", mime_type: 'audio/mp4; codecs="mp4a.40.2"' } }] },
+    });
+    if (u.startsWith("https://api-v2.soundcloud.com/media/")) return Response.json({ url: "https://cf-hls.example/list.m3u8" });
+    if (u === "https://cf-hls.example/list.m3u8") {
+      return new Response(['#EXTM3U', '#EXT-X-MAP:URI="init.mp4"', "#EXTINF:10,", "seg1.m4s", "#EXTINF:10,", "seg2.m4s", "#EXT-X-ENDLIST", ""].join("\n"));
+    }
+    if (u.startsWith("https://cf-hls.example/")) return new Response(new Uint8Array(1000));
+  });
+  await send(env, 111, "/start");
+  await send(env, 111, "https://soundcloud.com/band/song");
+  const audio = calls.find((c) => c.method === "sendAudio");
+  assert.ok(audio, JSON.stringify(calls));
+  assert.equal(audio.body.audio, 3000, "init + 2 segments");
+  assert.equal(audio.body.title, "Song");
+  assert.equal(audio.body.performer, "Band");
+  assert.equal(audio.body.duration, "61");
+});
+
+test("YouTube links are queued for the PC, which claims and finishes them", async () => {
   const { calls, env } = setup();
   await send(env, 111, "/start");
   await send(env, 111, "https://youtube.com/shorts/abc123");
@@ -124,7 +148,7 @@ test("YouTube and SoundCloud links are queued for the PC, which claims and finis
   assert.equal(first.jobs[0].reply_to, 7);
   assert.equal((await (await pc(env, "/pc/jobs")).json()).jobs.length, 0, "a claimed job isn't handed out twice");
 
-  await send(env, 111, "https://soundcloud.com/artist/track");
+  await send(env, 111, "https://youtu.be/aqz-KE-bpKQ");
   assert.match(calls.at(-1).body.text, /Downloading on the PC/, "the PC just polled, so it counts as on");
 
   await pc(env, "/pc/done", { method: "POST", body: JSON.stringify({ id: first.jobs[0].id, ok: true }) });
