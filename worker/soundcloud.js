@@ -80,8 +80,9 @@ export async function searchSoundCloud(query, kv, limit = 8) {
     const res = await fetch(`https://api-v2.soundcloud.com/search/tracks?q=${encodeURIComponent(query)}&limit=${limit * 2}&client_id=${id}`, { headers: HEADERS });
     if (!res.ok) continue;
     const { collection = [] } = await res.json();
-    return collection
-      .filter((t) => t.kind === "track" && t.policy !== "SNIP" && t.policy !== "BLOCK" && (t.media?.transcodings || []).some((x) => !x.snipped))
+    return dedupe(
+      collection.filter((t) => t.kind === "track" && t.policy !== "SNIP" && t.policy !== "BLOCK" && (t.media?.transcodings || []).some((x) => !x.snipped)),
+    )
       .slice(0, limit)
       .map((t) => ({ id: String(t.id), title: t.title || "Untitled", performer: t.user?.username || "", duration: Math.round((t.duration || 0) / 1000) }));
   }
@@ -93,6 +94,22 @@ export async function searchSoundCloud(query, kv, limit = 8) {
 function artworkUrl(track) {
   const src = track.artwork_url || track.user?.avatar_url || "";
   return src ? src.replace(/-(large|t\d+x\d+|crop|original)\.(jpg|png)/, "-t300x300.jpg") : null;
+}
+
+// The same song is often uploaded by several people ("Artist – Song", "ARTIST - song (sped up)"...).
+// Two results count as one song when their lengths are within 2 seconds and their titles share most
+// words; the first (most relevant) one is kept.
+const words = (t) => new Set(`${t.title} ${t.user?.username || ""}`.toLowerCase().normalize("NFKC").replace(/[^\p{L}\p{N}]+/gu, " ").split(" ").filter((w) => w.length > 1));
+function sameSong(a, b) {
+  if (Math.abs((a.duration || 0) - (b.duration || 0)) > 2000) return false;
+  const wa = words(a), wb = words(b);
+  const common = [...wa].filter((w) => wb.has(w)).length;
+  return common / Math.min(wa.size, wb.size) >= 0.6;
+}
+function dedupe(tracks) {
+  const kept = [];
+  for (const t of tracks) if (!kept.some((k) => sameSong(k, t))) kept.push(t);
+  return kept;
 }
 
 async function downloadTrack(track, id) {
