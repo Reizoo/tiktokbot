@@ -20,7 +20,7 @@ const PYTHON = process.env.PYTHON || path.join(ROOT, ".venv", "Scripts", "python
 const PLACEHOLDER_ORIGIN = "https://tiktok-bot.didigotreizoo.workers.dev"; // the Worker still serves /placeholder.mp3
 const PREFETCH_COUNT = 4; // top results downloaded per search
 const PREFETCH_BUDGET_MS = 6000; // the longest a search waits before answering
-const ANSWER_WHEN_READY = 2; // answer as soon as this many are ready; the rest keep downloading for next time
+const ANSWER_WHEN_READY = 2; // answer once the best this many results are ready; the rest keep downloading
 const TYPING_PAUSE_MS = 300; // Telegram sends a query per keystroke; only the last one in a pause is worked on
 
 for (const line of fs.existsSync(path.join(ROOT, ".env")) ? fs.readFileSync(path.join(ROOT, ".env"), "utf8").split(/\r?\n/) : []) {
@@ -52,23 +52,19 @@ async function prefetch(tracks, q) {
   await sleep(TYPING_PAUSE_MS);
   if (latestQuery.get(q.from.id) !== q.id) return; // still typing; a newer query will do the work
   const owner = await env.OWNER.get("owner");
-  const jobs = [];
-  for (const t of tracks.slice(0, PREFETCH_COUNT)) {
-    if (await env.OWNER.get(`fid:${t.id}`)) continue;
-    if (!inflight.has(t.id)) inflight.set(t.id, cacheTrack(t.id, owner).finally(() => inflight.delete(t.id)));
-    jobs.push(inflight.get(t.id));
-  }
-  // Answer once enough are ready (or all are done, or time's up). Whatever isn't ready keeps
-  // downloading and will be instant on the next search.
-  const cachedAlready = Math.min(tracks.length, PREFETCH_COUNT) - jobs.length;
-  let done = 0;
-  const enough = new Promise((resolve) => {
-    if (cachedAlready >= ANSWER_WHEN_READY || !jobs.length) return resolve();
-    for (const j of jobs) j.then(() => ++done + cachedAlready >= ANSWER_WHEN_READY && resolve());
-  });
+  // One promise per top result, in ranked order; tracks already on Telegram count as done.
+  const top = await Promise.all(
+    tracks.slice(0, PREFETCH_COUNT).map(async (t) => {
+      if (await env.OWNER.get(`fid:${t.id}`)) return { cached: true, job: Promise.resolve() };
+      if (!inflight.has(t.id)) inflight.set(t.id, cacheTrack(t.id, owner).finally(() => inflight.delete(t.id)));
+      return { cached: false, job: inflight.get(t.id) };
+    }),
+  );
+  // Answer once the best results are ready (or time's up), so a weaker track that happened to be
+  // cached from an earlier search can't stand in for them. The rest keep downloading for next time.
   const t0 = Date.now();
-  await Promise.race([enough, Promise.allSettled(jobs), sleep(PREFETCH_BUDGET_MS)]);
-  log(`inline "${q.query}": ${cachedAlready} cached, ${done} downloaded in ${Date.now() - t0} ms`);
+  await Promise.race([Promise.allSettled(top.slice(0, ANSWER_WHEN_READY).map((x) => x.job)), sleep(PREFETCH_BUDGET_MS)]);
+  log(`inline "${q.query}": ${top.filter((x) => x.cached).length} cached, answered after ${Date.now() - t0} ms`);
 }
 
 // Telegram only lists audio it already has, so each track is uploaded once and its file_id is kept.
