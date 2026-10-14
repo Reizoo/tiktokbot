@@ -71,16 +71,18 @@ async function prefetch(tracks, q) {
   log(`inline "${q.query}": ${cachedAlready} cached, ${done} downloaded in ${Date.now() - t0} ms`);
 }
 
-// Telegram only lists audio it already has, so each track is uploaded once to the owner's own chat
-// (silently, deleted straight after) and its file_id is kept.
+// Telegram only lists audio it already has, so each track is uploaded once and its file_id is kept.
+// Uploads go to a private storage channel (the bot is added there as an admin, see onMembership);
+// until one is connected they go to the owner's chat and are deleted straight after.
 async function cacheTrack(trackId, owner) {
+  const storage = (await env.OWNER.get("storage_chat")) || owner;
   try {
     const t0 = Date.now();
     const t = await fetchSoundCloudById(trackId, env.OWNER);
     const t1 = Date.now();
     if (t.body.size > MAX_BYTES) return;
     const form = new FormData();
-    form.append("chat_id", owner);
+    form.append("chat_id", storage);
     form.append("disable_notification", "true");
     form.append("title", t.title.slice(0, 64));
     if (t.performer) form.append("performer", t.performer.slice(0, 64));
@@ -91,9 +93,23 @@ async function cacheTrack(trackId, owner) {
     if (!sent.ok) return log("cache upload refused", trackId, sent.description);
     await env.OWNER.put(`fid:${trackId}`, sent.result.audio.file_id);
     log(`cached ${trackId}: download ${t1 - t0} ms, upload ${Date.now() - t1} ms, ${(t.body.size / 1048576).toFixed(1)} MB`);
-    tg(env, "deleteMessage", { chat_id: owner, message_id: sent.result.message_id }); // no need to wait for it
+    if (storage === owner) tg(env, "deleteMessage", { chat_id: owner, message_id: sent.result.message_id }); // no need to wait
   } catch (e) {
     log("cache failed", trackId, e.message);
+  }
+}
+
+// The bot added as an admin to a channel by the owner: that channel becomes the storage for inline tracks.
+async function onMembership(m) {
+  const owner = await env.OWNER.get("owner");
+  if (m.chat.type !== "channel" || String(m.from?.id) !== owner) return;
+  if (["administrator"].includes(m.new_chat_member?.status)) {
+    await env.OWNER.put("storage_chat", String(m.chat.id));
+    log("storage channel connected", m.chat.id);
+    await say(env, owner, `Storage channel "${m.chat.title}" connected. Inline tracks are kept there now, not in this chat.`);
+  } else if (String(m.chat.id) === (await env.OWNER.get("storage_chat"))) {
+    await env.OWNER.delete("storage_chat");
+    await say(env, owner, "Storage channel disconnected. Inline tracks go through this chat again.");
   }
 }
 
@@ -156,7 +172,7 @@ async function main() {
   let offset = 0;
   for (;;) {
     try {
-      const res = await (await tg(env, "getUpdates", { offset, timeout: 50, allowed_updates: ["message", "inline_query", "chosen_inline_result"] })).json();
+      const res = await (await tg(env, "getUpdates", { offset, timeout: 50, allowed_updates: ["message", "inline_query", "chosen_inline_result", "my_chat_member"] })).json();
       if (!res.ok) {
         log("getUpdates refused:", res.description);
         await sleep(5000);
@@ -170,7 +186,9 @@ async function main() {
             ? inlineSearch(u.inline_query, env, PLACEHOLDER_ORIGIN)
             : u.chosen_inline_result
               ? inlineChosen(u.chosen_inline_result, env)
-              : null;
+              : u.my_chat_member
+                ? onMembership(u.my_chat_member)
+                : null;
         job?.catch((e) => log("handler failed", e.message)); // run in parallel, don't block polling
       }
     } catch (e) {
