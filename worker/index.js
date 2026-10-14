@@ -91,6 +91,7 @@ async function sendSoundCloud(env, msg, link) {
     form.append("reply_to_message_id", String(msg.message_id));
     const name = `${t.performer ? t.performer + " - " : ""}${t.title}`.replace(/[\\/:*?"<>|]+/g, "").slice(0, 80) || "track";
     form.append("audio", new Blob([t.body], { type: t.mime }), `${name}.${t.ext}`);
+    await addArtwork(form, t.artwork);
     const res = await upload(env, "sendAudio", form);
     if (!res.ok) throw new Error(`Telegram refused the audio (HTTP ${res.status})`);
   } catch (e) {
@@ -214,6 +215,7 @@ async function inlineChosen(r, env) {
     if (t.performer) form.append("performer", t.performer.slice(0, 64));
     if (t.duration) form.append("duration", String(t.duration));
     form.append("audio", new Blob([t.body], { type: t.mime }), `track.${t.ext}`);
+    await addArtwork(form, t.artwork);
     const sent = await (await upload(env, "sendAudio", form)).json();
     if (!sent.ok) throw new Error(`upload refused: ${sent.description}`);
     await env.OWNER.put(`fid:${r.result_id}`, sent.result.audio.file_id);
@@ -255,6 +257,19 @@ async function pcApi(request, env, url) {
     return Response.json({ ok: true });
   }
   return new Response("not found", { status: 404 });
+}
+
+// Attaches the cover art to an audio upload when it's small enough for Telegram (JPEG, under 200 kB).
+async function addArtwork(form, artwork) {
+  if (!artwork) return;
+  try {
+    const res = await fetch(artwork);
+    if (!res.ok) return;
+    const img = await res.arrayBuffer();
+    if (img.byteLength < 200 * 1024) form.append("thumbnail", new Blob([img], { type: "image/jpeg" }), "cover.jpg");
+  } catch {
+    // no cover is fine
+  }
 }
 
 // ---------- Telegram ----------

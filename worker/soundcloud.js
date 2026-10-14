@@ -82,6 +82,13 @@ export async function searchSoundCloud(query, kv, limit = 8) {
   throw new Error("SoundCloud search failed");
 }
 
+// Cover art at 300x300 (Telegram wants audio thumbnails at most 320px and under 200 kB).
+// Tracks without their own artwork fall back to the uploader's picture, like SoundCloud does.
+function artworkUrl(track) {
+  const src = track.artwork_url || track.user?.avatar_url || "";
+  return src ? src.replace(/-(large|t\d+x\d+|crop|original)\.(jpg|png)/, "-t300x300.jpg") : null;
+}
+
 async function downloadTrack(track, id) {
   const options = (track.media?.transcodings || []).filter((t) => !t.snipped && !/encrypted|ctr|cbc/i.test(t.format?.protocol || ""));
   const rank = (t) =>
@@ -98,6 +105,7 @@ async function downloadTrack(track, id) {
       const mp3 = /mpeg/.test(t.format.mime_type);
       return {
         body,
+        artwork: artworkUrl(track),
         ext: mp3 ? "mp3" : "m4a",
         mime: mp3 ? "audio/mpeg" : "audio/mp4",
         title: track.title || "SoundCloud track",
