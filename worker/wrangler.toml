@@ -7,4 +7,10 @@ compatibility_date = "2026-09-01"
 binding = "OWNER"
 id = "0ce1f5f63a6d4c4cb8adb0b32b1e9d41"
 
-# Secrets (set by connect.ps1, never stored in the repo): BOT_TOKEN, WEBHOOK_SECRET
+# Queue of YouTube / SoundCloud jobs for the PC (schema.sql).
+[[d1_databases]]
+binding = "DB"
+database_name = "tiktok-bot-jobs"
+database_id = "7040576b-163d-49e2-a376-13d7fea86698"
+
+# Secrets (set by connect.ps1, never stored in the repo): BOT_TOKEN, WEBHOOK_SECRET, PC_KEY
