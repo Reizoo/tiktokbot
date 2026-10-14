@@ -1,38 +1,43 @@
-# TikTok bot
+# Downloader bot
 
-A private Telegram bot: send it a TikTok link and it sends the video back without the watermark.
+A private Telegram bot: send it a link and it sends the file back.
 
-Two versions:
-- **`worker/` (main): runs on Cloudflare Workers**, free, works with the PC off. Reads TikTok's page itself, no yt-dlp.
-- **`bot.py`: runs on this PC** with [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [aiogram](https://aiogram.dev). A backup if TikTok ever changes its page and the Worker breaks.
+| Link | What comes back | Runs on |
+|---|---|---|
+| TikTok video | MP4 without the watermark | Cloudflare Worker, always on |
+| TikTok photo slideshow | the photos as albums of up to 10, plus the sound as MP3 | Cloudflare Worker, always on |
+| YouTube video or Short | MP4 (best quality that fits in 50 MB; audio only if even 360p is too big) | this PC, while `start-pc.bat` is running |
+| SoundCloud track | MP3 with title and artist | this PC, while `start-pc.bat` is running |
 
-## Cloudflare version (once)
+YouTube blocks downloads from data centres, so YouTube and SoundCloud go through the PC. The Worker queues those links in D1, and `pc_worker.py` (yt-dlp + ffmpeg) picks them up every few seconds and sends the file straight to the chat. If the PC is off, the bot says so and sends the file once it's back.
+
+## Setup (once)
 
 1. In Telegram, open **@BotFather**, send `/newbot`, pick a name and a username ending in `bot`. Copy the token.
-2. On this PC, right-click `worker/connect.ps1` → *Run with PowerShell*. It sends the token from the clipboard to Cloudflare, connects Telegram to the Worker, and clears the clipboard.
+2. Right-click `worker/connect.ps1` → *Run with PowerShell*. It sends the token from the clipboard to Cloudflare, writes `.env` for the PC part, connects Telegram to the Worker, and clears the clipboard.
 3. Open your bot in Telegram and send `/start`. The first person to do this becomes the owner; nobody else can use it.
+4. For YouTube and SoundCloud, double-click `start-pc.bat` and leave the window open.
 
-Worker: https://tiktok-bot.didigotreizoo.workers.dev (Telegram posts to `/webhook`, checked with a secret header). Tests: `cd worker && npm test`. Deploy: `npx wrangler deploy`.
-
-## PC version setup (once)
-
-1. In Telegram, open **@BotFather**, send `/newbot`, pick a name and a username ending in `bot`.
-2. Copy the token BotFather gives you.
-3. On this PC, right-click `save-token.ps1` → *Run with PowerShell*. It saves the token to `.env` straight from the clipboard.
-4. Double-click `start.bat`. Keep the window open while you want the bot to work.
-5. Open your bot in Telegram and send `/start`. The first person to do this becomes the owner; nobody else can use it.
-
-First-time install of the libraries (already done on this PC):
+Python libraries for the PC part (already installed here):
 
 ```
 python -m venv .venv
 .venv\Scripts\python -m pip install -r requirements.txt
 ```
 
+## How it fits together
+
+- `worker/index.js`: Telegram webhook (`/webhook`, checked with a secret header), owner lock in KV, TikTok handling, the job queue, and `/pc/jobs` + `/pc/done` for the PC (checked with `X-PC-Key`).
+- `worker/tiktok.js`: reads TikTok's page and picks the clean H.264 stream, or the images and sound of a slideshow.
+- `worker/links.js`: decides which service a link belongs to.
+- `worker/schema.sql`: the D1 tables (`jobs`, `meta`).
+- `pc_worker.py`: polls the Worker, downloads with yt-dlp, uploads to Telegram.
+
+Tests: `cd worker && npm test` (fake Telegram, SQLite in place of D1, real TikTok). Deploy: `cd worker && npx wrangler deploy`.
+
 ## Notes
 
-- Picks TikTok's clean H.264 stream (no watermark), not the watermarked "download" file.
-- Telegram lets bots send files up to 50 MB; longer videos above that get a message instead.
-- Photo slideshows aren't supported yet.
-- If downloads start failing, update yt-dlp: `.venv\Scripts\python -m pip install -U "yt-dlp[default,curl-cffi]"`.
+- Telegram lets bots upload up to 50 MB, so long YouTube videos come down in lower quality or as audio.
+- DRM-protected SoundCloud tracks (Go+) and age-restricted YouTube videos can't be downloaded.
+- If YouTube starts failing, update yt-dlp: `.venv\Scripts\python -m pip install -U "yt-dlp[default,curl-cffi]"`.
 - For personal use. Respect creators' rights when reposting.
