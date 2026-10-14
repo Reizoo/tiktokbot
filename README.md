@@ -2,6 +2,8 @@
 
 A private Telegram bot: send it a link and it sends the file back.
 
+**Now running on the Windows server (2.27.20.15)** as the `DownloaderBot` scheduled task (`server/bot.mjs`, long polling). It does everything there, YouTube included, and inline search lists only tracks that are already downloaded, so there's no placeholder. The Cloudflare Worker stays deployed as a fallback: running `worker/connect.ps1` switches Telegram back to it (then stop the task on the server).
+
 | Link | What comes back | Runs on |
 |---|---|---|
 | TikTok video | MP4 without the watermark | Cloudflare Worker, always on |
@@ -26,6 +28,13 @@ Python libraries for the PC part (already installed here):
 python -m venv .venv
 .venv\Scripts\python -m pip install -r requirements.txt
 ```
+
+## Server version (server/)
+
+- `server/bot.mjs`: the same handlers as the Worker (imported from `worker/index.js`) with long polling, a JSON file store instead of KV (`server/store.mjs`), YouTube through `server/ytdl.py`, and inline prefetch: after a 0.6 s pause in typing it downloads the top 4 results (up to 7 s) and lists the ready ones.
+- `server/run.cmd`: restarts the bot if it exits. `server/install-task.ps1`: registers `DownloaderBot` to start with Windows as SYSTEM.
+- Files on the server: `C:ot` (code, `.env` with the token, `.venv` with yt-dlp + ffmpeg, `data\store.json`, `dataot.log`).
+- Update the code: copy `worker/*.js` and `server/*` to `C:ot`, then `Restart-ScheduledTask`… or simply reboot.
 
 ## How it fits together
 
