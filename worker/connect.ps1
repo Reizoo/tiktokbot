@@ -17,7 +17,7 @@ $pcKey         | npx wrangler secret put PC_KEY
 Set-Content -Path (Join-Path $PSScriptRoot "..\.env") -Value @("BOT_TOKEN=$token", "PC_KEY=$pcKey") -Encoding utf8
 
 $hook = "https://tiktok-bot.didigotreizoo.workers.dev/webhook"
-$r = Invoke-RestMethod -Method Post -Uri "https://api.telegram.org/bot$token/setWebhook" -Body @{ url = $hook; secret_token = $webhookSecret; allowed_updates = '["message"]'; drop_pending_updates = 'true' }
+$r = Invoke-RestMethod -Method Post -Uri "https://api.telegram.org/bot$token/setWebhook" -Body @{ url = $hook; secret_token = $webhookSecret; allowed_updates = '["message","inline_query","chosen_inline_result"]'; drop_pending_updates = 'true' }
 if ($r.ok) { Write-Host "Done. Open your bot in Telegram and send /start. For YouTube/SoundCloud, run start-pc.bat." } else { Write-Host "Telegram said: $($r.description)" }
 Set-Clipboard -Value " "
 pause
