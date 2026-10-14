@@ -102,7 +102,10 @@ async function downloadTrack(track, id) {
       : t.format.protocol === "hls" && /mpeg/.test(t.format.mime_type) ? 1
       : t.format.protocol === "hls" && /mp4/.test(t.format.mime_type) ? 2
       : 9;
-  for (const t of options.sort((a, b) => rank(a) - rank(b)).filter((t) => rank(t) < 9)) {
+  // Within the same kind, the 96 kbps AAC copy comes first: ~40% smaller, so it downloads and uploads
+  // faster, and on a phone it sounds the same as 160 kbps.
+  const kbps = (t) => Number((t.preset || "").match(/(\d+)k/)?.[1] || 128);
+  for (const t of options.sort((a, b) => rank(a) - rank(b) || kbps(a) - kbps(b)).filter((t) => rank(t) < 9)) {
     const res = await fetch(`${t.url}?client_id=${id}&track_authorization=${track.track_authorization}`, { headers: HEADERS });
     if (!res.ok) continue; // some listed streams answer 404; try the next one
     const { url: media } = await res.json();
