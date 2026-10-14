@@ -24,7 +24,6 @@ export default {
       return new Response("forbidden", { status: 403 });
     }
     const update = await request.json().catch(() => null);
-    console.log("update", Object.keys(update || {}).filter((k) => k !== "update_id").join(","));
     // Answer Telegram straight away; the download carries on in the background.
     if (update?.message) ctx.waitUntil(handle(update.message, env));
     if (update?.inline_query) ctx.waitUntil(inlineSearch(update.inline_query, env, url.origin));
@@ -173,17 +172,23 @@ async function inlineSearch(q, env, origin) {
   if (query.length < 2) return answer([]);
   try {
     const tracks = await searchSoundCloud(query, env.OWNER, 8);
+    // Tracks sent before are already on Telegram's servers: those go out straight away, no placeholder.
+    const cached = await Promise.all(tracks.map((t) => env.OWNER.get(`fid:${t.id}`)));
     return answer(
-      tracks.map((t) => ({
-        type: "audio",
-        id: t.id,
-        audio_url: `${origin}/placeholder.mp3`,
-        title: t.title.slice(0, 64),
-        performer: t.performer.slice(0, 64),
-        audio_duration: t.duration,
-        caption: "⏳ Loading…",
-        reply_markup: SEARCH_AGAIN, // needed: without a keyboard Telegram doesn't send back inline_message_id
-      })),
+      tracks.map((t, i) =>
+        cached[i]
+          ? { type: "audio", id: t.id, audio_file_id: cached[i], reply_markup: SEARCH_AGAIN }
+          : {
+              type: "audio",
+              id: t.id,
+              audio_url: `${origin}/placeholder.mp3`,
+              title: t.title.slice(0, 64),
+              performer: t.performer.slice(0, 64),
+              audio_duration: t.duration,
+              caption: "⏳",
+              reply_markup: SEARCH_AGAIN, // needed: without a keyboard Telegram doesn't send back inline_message_id
+            },
+      ),
     );
   } catch (e) {
     console.log("inline search failed", e.message);
@@ -193,14 +198,12 @@ async function inlineSearch(q, env, origin) {
 
 // Telegram can't take a fresh upload into an inline message, so the track goes to the owner's own chat
 // first (silently, deleted straight after) to get a file_id, and the placeholder is then edited into it.
+// The file_id is kept in KV (fid:<track id>), so the same track is sent instantly next time.
 // Needs inline feedback switched on in @BotFather (/setinlinefeedback).
 async function inlineChosen(r, env) {
   const owner = await env.OWNER.get("owner");
-  if (!owner || String(r.from.id) !== owner || !r.inline_message_id) {
-    console.log("chosen result skipped", { owner: !!owner, isOwner: String(r.from.id) === owner, hasInlineId: !!r.inline_message_id });
-    return;
-  }
-  console.log("chosen result", r.result_id);
+  if (!owner || String(r.from.id) !== owner || !r.inline_message_id) return;
+  if (await env.OWNER.get(`fid:${r.result_id}`)) return; // sent from cache, nothing to swap
   try {
     const t = await fetchSoundCloudById(r.result_id, env.OWNER);
     if (t.body.size > MAX_BYTES) throw new Error("over 50 MB");
@@ -213,14 +216,13 @@ async function inlineChosen(r, env) {
     form.append("audio", new Blob([t.body], { type: t.mime }), `track.${t.ext}`);
     const sent = await (await upload(env, "sendAudio", form)).json();
     if (!sent.ok) throw new Error(`upload refused: ${sent.description}`);
-    console.log("helper upload ok", { kind: Object.keys(sent.result).filter((k) => ["audio", "document", "voice"].includes(k)), bytes: t.body.size, ext: t.ext });
+    await env.OWNER.put(`fid:${r.result_id}`, sent.result.audio.file_id);
     await tg(env, "deleteMessage", { chat_id: owner, message_id: sent.result.message_id });
     const res = await (await tg(env, "editMessageMedia", {
       inline_message_id: r.inline_message_id,
       media: { type: "audio", media: sent.result.audio.file_id, title: t.title.slice(0, 64), performer: t.performer.slice(0, 64), duration: t.duration },
       reply_markup: SEARCH_AGAIN,
     })).json();
-    console.log("edit result", JSON.stringify(res).slice(0, 300));
     if (!res.ok) throw new Error(`edit refused: ${res.description}`);
   } catch (e) {
     console.log("inline download failed", r.result_id, e.message);
