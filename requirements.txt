@@ -1,3 +1,4 @@
 yt-dlp[default,curl-cffi]
-aiogram>=3.31
+requests
+imageio-ffmpeg
 python-dotenv
