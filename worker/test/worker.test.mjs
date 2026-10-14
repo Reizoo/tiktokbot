@@ -169,10 +169,12 @@ test("inline search lists SoundCloud tracks and the chosen one replaces the plac
     ] });
     if (u.startsWith("https://api-v2.soundcloud.com/tracks/5")) return Response.json({
       kind: "track", title: "Song", user: { username: "Band" }, duration: 61000, track_authorization: "t",
+      artwork_url: "https://i1.sndcdn.com/artworks-abc-large.jpg",
       media: { transcodings: [{ url: "https://api-v2.soundcloud.com/media/5/mp3", preset: "mp3_1_0", snipped: false, format: { protocol: "progressive", mime_type: "audio/mpeg" } }] },
     });
     if (u.startsWith("https://api-v2.soundcloud.com/media/")) return Response.json({ url: "https://cf-media.example/5.mp3" });
     if (u === "https://cf-media.example/5.mp3") return new Response(new Uint8Array(2048));
+    if (u === "https://i1.sndcdn.com/artworks-abc-t300x300.jpg") return new Response(new Uint8Array(4000), { headers: { "content-type": "image/jpeg" } });
   };
   const { calls, env } = setup(sc);
   // Telegram answers sendAudio with the uploaded file's id.
@@ -198,6 +200,7 @@ test("inline search lists SoundCloud tracks and the chosen one replaces the plac
   const up = calls.find((c) => c.method === "sendAudio");
   assert.equal(up.body.chat_id, "111");
   assert.equal(up.body.audio, 2048);
+  assert.equal(up.body.thumbnail, 4000, "cover art is attached at 300x300");
   assert.ok(calls.find((c) => c.method === "deleteMessage" && c.body.message_id === 99), "the helper upload is deleted");
   const edit = calls.find((c) => c.method === "editMessageMedia");
   assert.equal(edit.body.inline_message_id, "IM1");
