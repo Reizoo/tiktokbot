@@ -2,11 +2,14 @@
 // - TikTok videos and photo slideshows: downloaded here and sent back straight away.
 // - SoundCloud: downloaded here too (MP3 when SoundCloud has it, otherwise M4A); falls back to the PC queue.
 // - YouTube (videos and Shorts): queued in D1; the PC (pc_worker.py, with yt-dlp) picks them up.
+// - Inline mode: "@bot track name" in any chat searches SoundCloud; the picked result goes out as a
+//   placeholder and is swapped for the real track once downloaded (see inlineChosen).
 // Telegram calls POST /webhook (set up by connect.ps1). Only the owner (first /start) can use the bot.
 // The PC calls GET /pc/jobs and POST /pc/done with the X-PC-Key header.
 import { fetchTikTok } from "./tiktok.js";
 import { findLink } from "./links.js";
-import { fetchSoundCloud } from "./soundcloud.js";
+import { fetchSoundCloud, fetchSoundCloudById, searchSoundCloud } from "./soundcloud.js";
+import { SILENCE_MP3 } from "./placeholder.js";
 
 const MAX_BYTES = 49 * 1024 * 1024; // Telegram bots can upload up to 50 MB
 const PC_ONLINE_MS = 30_000; // the PC polls every few seconds; quieter than this means it's off
@@ -15,6 +18,7 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (url.pathname.startsWith("/pc/")) return pcApi(request, env, url);
+    if (url.pathname === "/placeholder.mp3") return new Response(SILENCE_MP3, { headers: { "Content-Type": "audio/mpeg", "Cache-Control": "public, max-age=86400" } });
     if (url.pathname !== "/webhook" || request.method !== "POST") return new Response("ok");
     if (!env.WEBHOOK_SECRET || request.headers.get("X-Telegram-Bot-Api-Secret-Token") !== env.WEBHOOK_SECRET) {
       return new Response("forbidden", { status: 403 });
@@ -22,6 +26,8 @@ export default {
     const update = await request.json().catch(() => null);
     // Answer Telegram straight away; the download carries on in the background.
     if (update?.message) ctx.waitUntil(handle(update.message, env));
+    if (update?.inline_query) ctx.waitUntil(inlineSearch(update.inline_query, env, url.origin));
+    if (update?.chosen_inline_result) ctx.waitUntil(inlineChosen(update.chosen_inline_result, env));
     return new Response("ok");
   },
 };
@@ -135,6 +141,68 @@ async function queueForPc(env, msg, link) {
   const seen = Number((await env.DB.prepare("SELECT value FROM meta WHERE key = 'pc_seen'").first())?.value || 0);
   const online = Date.now() - seen < PC_ONLINE_MS;
   await say(env, chat, online ? "Downloading on the PC…" : "The PC is off. I'll send it as soon as it's back on.");
+}
+
+// ---------- inline mode ----------
+
+// The 🔍 button under each sent track opens a new search in the same chat, like other music bots.
+const SEARCH_AGAIN = { inline_keyboard: [[{ text: "🔍", switch_inline_query_current_chat: "" }]] };
+
+async function inlineSearch(q, env, origin) {
+  const owner = await env.OWNER.get("owner");
+  const answer = (results, extra = {}) => tg(env, "answerInlineQuery", { inline_query_id: q.id, results, cache_time: 300, is_personal: true, ...extra });
+  if (!owner || String(q.from.id) !== owner) return answer([], { cache_time: 3600 });
+  const query = q.query.trim();
+  if (query.length < 2) return answer([]);
+  try {
+    const tracks = await searchSoundCloud(query, env.OWNER, 8);
+    return answer(
+      tracks.map((t) => ({
+        type: "audio",
+        id: t.id,
+        audio_url: `${origin}/placeholder.mp3`,
+        title: t.title.slice(0, 64),
+        performer: t.performer.slice(0, 64),
+        audio_duration: t.duration,
+        caption: "⏳ Loading…",
+        reply_markup: SEARCH_AGAIN, // needed: without a keyboard Telegram doesn't send back inline_message_id
+      })),
+    );
+  } catch (e) {
+    console.log("inline search failed", e.message);
+    return answer([]);
+  }
+}
+
+// Telegram can't take a fresh upload into an inline message, so the track goes to the owner's own chat
+// first (silently, deleted straight after) to get a file_id, and the placeholder is then edited into it.
+// Needs inline feedback switched on in @BotFather (/setinlinefeedback).
+async function inlineChosen(r, env) {
+  const owner = await env.OWNER.get("owner");
+  if (!owner || String(r.from.id) !== owner || !r.inline_message_id) return;
+  try {
+    const t = await fetchSoundCloudById(r.result_id, env.OWNER);
+    if (t.body.size > MAX_BYTES) throw new Error("over 50 MB");
+    const form = new FormData();
+    form.append("chat_id", owner);
+    form.append("disable_notification", "true");
+    form.append("title", t.title.slice(0, 64));
+    if (t.performer) form.append("performer", t.performer.slice(0, 64));
+    if (t.duration) form.append("duration", String(t.duration));
+    form.append("audio", new Blob([t.body], { type: t.mime }), `track.${t.ext}`);
+    const sent = await (await upload(env, "sendAudio", form)).json();
+    if (!sent.ok) throw new Error(`upload refused: ${sent.description}`);
+    await tg(env, "deleteMessage", { chat_id: owner, message_id: sent.result.message_id });
+    const res = await (await tg(env, "editMessageMedia", {
+      inline_message_id: r.inline_message_id,
+      media: { type: "audio", media: sent.result.audio.file_id, title: t.title.slice(0, 64), performer: t.performer.slice(0, 64), duration: t.duration },
+      reply_markup: SEARCH_AGAIN,
+    })).json();
+    if (!res.ok) throw new Error(`edit refused: ${res.description}`);
+  } catch (e) {
+    console.log("inline download failed", r.result_id, e.message);
+    await tg(env, "editMessageCaption", { inline_message_id: r.inline_message_id, caption: "Couldn't download this track.", reply_markup: SEARCH_AGAIN });
+  }
 }
 
 // ---------- PC side: pc_worker.py ----------
