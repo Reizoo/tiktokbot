@@ -34,6 +34,7 @@ function setup(extraFetch) {
         ? Object.fromEntries([...init.body].map(([k, v]) => [k, v instanceof Blob ? v.size : v]))
         : JSON.parse(init.body);
       calls.push({ method, body });
+      if (method === "getMe") return Response.json({ ok: true, result: { supports_inline_queries: true } });
       return new Response('{"ok":true}');
     }
     const fake = extraFetch?.(u);
@@ -77,9 +78,12 @@ test("first /start becomes the owner, others are refused", async () => {
   await send(env, 111, "/start");
   await send(env, 222, "/start");
   await send(env, 222, VIDEO);
-  assert.match(calls[0].body.text, /TikTok videos/);
-  assert.equal(calls[1].body.text, "This is a private bot.");
-  assert.equal(calls[2].body.text, "This is a private bot.");
+  assert.ok(calls.some((c) => c.method === "getWebhookInfo"), "/start checks the webhook");
+  assert.ok(!calls.some((c) => c.method === "sendMessage" && /Inline search is off/.test(c.body.text)), "no warning when inline mode is on");
+  const welcome = calls.filter((c) => c.method === "sendMessage");
+  assert.match(welcome[0].body.text, /TikTok videos/);
+  assert.equal(welcome[1].body.text, "This is a private bot.");
+  assert.equal(welcome[2].body.text, "This is a private bot.");
 });
 
 test("a TikTok video comes back as a watermark-free upload", async () => {
