@@ -53,6 +53,36 @@ async function joinHls(m3u8Url) {
 export async function fetchSoundCloud(url, kv) {
   const { track, id } = await resolve(url, kv);
   if (track.kind !== "track") throw new Error("not a single track (playlists aren't supported)");
+  return downloadTrack(track, id);
+}
+
+// For inline mode: the result id is the track id.
+export async function fetchSoundCloudById(trackId, kv) {
+  for (const fresh of [false, true]) {
+    const id = await clientId(kv, fresh);
+    const res = await fetch(`https://api-v2.soundcloud.com/tracks/${encodeURIComponent(trackId)}?client_id=${id}`, { headers: HEADERS });
+    if (res.ok) return downloadTrack(await res.json(), id);
+    if (res.status === 404) throw new Error("track not found, private or deleted");
+  }
+  throw new Error("SoundCloud refused the request");
+}
+
+// Search for inline mode. Only tracks with a full (not preview-only) stream come back.
+export async function searchSoundCloud(query, kv, limit = 8) {
+  for (const fresh of [false, true]) {
+    const id = await clientId(kv, fresh);
+    const res = await fetch(`https://api-v2.soundcloud.com/search/tracks?q=${encodeURIComponent(query)}&limit=${limit * 2}&client_id=${id}`, { headers: HEADERS });
+    if (!res.ok) continue;
+    const { collection = [] } = await res.json();
+    return collection
+      .filter((t) => t.kind === "track" && t.policy !== "SNIP" && t.policy !== "BLOCK" && (t.media?.transcodings || []).some((x) => !x.snipped))
+      .slice(0, limit)
+      .map((t) => ({ id: String(t.id), title: t.title || "Untitled", performer: t.user?.username || "", duration: Math.round((t.duration || 0) / 1000) }));
+  }
+  throw new Error("SoundCloud search failed");
+}
+
+async function downloadTrack(track, id) {
   const options = (track.media?.transcodings || []).filter((t) => !t.snipped && !/encrypted|ctr|cbc/i.test(t.format?.protocol || ""));
   const rank = (t) =>
     t.format.protocol === "progressive" && /mpeg/.test(t.format.mime_type) ? 0
