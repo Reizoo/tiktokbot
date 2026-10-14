@@ -19,8 +19,9 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PYTHON = process.env.PYTHON || path.join(ROOT, ".venv", "Scripts", "python.exe");
 const PLACEHOLDER_ORIGIN = "https://tiktok-bot.didigotreizoo.workers.dev"; // the Worker still serves /placeholder.mp3
 const PREFETCH_COUNT = 4; // top results downloaded per search
-const PREFETCH_BUDGET_MS = 7000; // how long a search waits for them before answering
-const TYPING_PAUSE_MS = 600; // Telegram sends a query per keystroke; only the last one in a pause is worked on
+const PREFETCH_BUDGET_MS = 6000; // the longest a search waits before answering
+const ANSWER_WHEN_READY = 2; // answer as soon as this many are ready; the rest keep downloading for next time
+const TYPING_PAUSE_MS = 300; // Telegram sends a query per keystroke; only the last one in a pause is worked on
 
 for (const line of fs.existsSync(path.join(ROOT, ".env")) ? fs.readFileSync(path.join(ROOT, ".env"), "utf8").split(/\r?\n/) : []) {
   const m = line.replace(/^﻿/, "").match(/^\s*([A-Z_]+)\s*=\s*(.*?)\s*$/);
@@ -57,15 +58,26 @@ async function prefetch(tracks, q) {
     if (!inflight.has(t.id)) inflight.set(t.id, cacheTrack(t.id, owner).finally(() => inflight.delete(t.id)));
     jobs.push(inflight.get(t.id));
   }
-  // Whatever isn't ready in time keeps downloading and will be instant on the next search.
-  await Promise.race([Promise.allSettled(jobs), sleep(PREFETCH_BUDGET_MS)]);
+  // Answer once enough are ready (or all are done, or time's up). Whatever isn't ready keeps
+  // downloading and will be instant on the next search.
+  const cachedAlready = Math.min(tracks.length, PREFETCH_COUNT) - jobs.length;
+  let done = 0;
+  const enough = new Promise((resolve) => {
+    if (cachedAlready >= ANSWER_WHEN_READY || !jobs.length) return resolve();
+    for (const j of jobs) j.then(() => ++done + cachedAlready >= ANSWER_WHEN_READY && resolve());
+  });
+  const t0 = Date.now();
+  await Promise.race([enough, Promise.allSettled(jobs), sleep(PREFETCH_BUDGET_MS)]);
+  log(`inline "${q.query}": ${cachedAlready} cached, ${done} downloaded in ${Date.now() - t0} ms`);
 }
 
 // Telegram only lists audio it already has, so each track is uploaded once to the owner's own chat
 // (silently, deleted straight after) and its file_id is kept.
 async function cacheTrack(trackId, owner) {
   try {
+    const t0 = Date.now();
     const t = await fetchSoundCloudById(trackId, env.OWNER);
+    const t1 = Date.now();
     if (t.body.size > MAX_BYTES) return;
     const form = new FormData();
     form.append("chat_id", owner);
@@ -78,7 +90,8 @@ async function cacheTrack(trackId, owner) {
     const sent = await (await upload(env, "sendAudio", form)).json();
     if (!sent.ok) return log("cache upload refused", trackId, sent.description);
     await env.OWNER.put(`fid:${trackId}`, sent.result.audio.file_id);
-    await tg(env, "deleteMessage", { chat_id: owner, message_id: sent.result.message_id });
+    log(`cached ${trackId}: download ${t1 - t0} ms, upload ${Date.now() - t1} ms, ${(t.body.size / 1048576).toFixed(1)} MB`);
+    tg(env, "deleteMessage", { chat_id: owner, message_id: sent.result.message_id }); // no need to wait for it
   } catch (e) {
     log("cache failed", trackId, e.message);
   }
