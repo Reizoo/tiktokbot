@@ -29,6 +29,11 @@ export function fileStore(path) {
       data[key] = { v: String(value), ...(opts.expirationTtl ? { exp: Date.now() + opts.expirationTtl * 1000 } : {}) };
       save();
     },
+    // Live keys starting with prefix (for /stats).
+    async keys(prefix = "") {
+      const now = Date.now();
+      return Object.keys(data).filter((k) => k.startsWith(prefix) && !(data[k].exp && data[k].exp < now));
+    },
     async delete(key) {
       delete data[key];
       save();
