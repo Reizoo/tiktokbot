@@ -174,7 +174,7 @@ async function inlineSearch(q, env, origin) {
   const query = q.query.trim();
   if (query.length < 2) return answer([]);
   try {
-    const tracks = await searchSoundCloud(query, env.OWNER, 8);
+    const tracks = env.SEARCH ? await env.SEARCH(query) : await searchSoundCloud(query, env.OWNER, 8); // the server caches searches
     // Tracks sent before are already on Telegram's servers: those go out straight away, no placeholder.
     // The server version (env.PREFETCH) also downloads the top results while you type, and then lists
     // only tracks that are ready; the Worker can't (50 requests per call), so it falls back to placeholders.
