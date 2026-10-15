@@ -15,6 +15,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { handle, inlineSearch, inlineChosen, tg, say, upload, addArtwork, MAX_BYTES } from "../worker/index.js";
 import { fetchSoundCloudById, searchSoundCloud } from "../worker/soundcloud.js";
+import { findLink } from "../worker/links.js";
 import { fileStore } from "./store.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -256,6 +257,47 @@ async function youtube(msg, link) {
 
 // ---------- long polling ----------
 
+// ---------- /stats ----------
+
+const STARTED = Date.now();
+
+// Counts what the bot sent, by service, for /stats.
+async function count(kind) {
+  const c = JSON.parse((await env.OWNER.get("stats:counts")) || "{}");
+  c[kind] = (c[kind] || 0) + 1;
+  await env.OWNER.put("stats:counts", JSON.stringify(c));
+}
+
+function ago(ms) {
+  const m = Math.floor(ms / 60000);
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60);
+  return h < 48 ? `${h} h ${m % 60} min` : `${Math.floor(h / 24)} days`;
+}
+
+async function statsNow(msg) {
+  if (String(msg.from?.id) !== (await env.OWNER.get("owner"))) return handle(msg, env);
+  const c = JSON.parse((await env.OWNER.get("stats:counts")) || "{}");
+  const queries = Object.entries(JSON.parse((await env.OWNER.get("stats:queries")) || "{}"))
+    .sort(([, a], [, b]) => b.n - a.n)
+    .slice(0, 5);
+  const lines = [
+    "📊 Bot stats",
+    "",
+    `Sent: ${c.inline || 0} from search, ${c.soundcloud || 0} SoundCloud links, ${c.tiktok || 0} TikTok, ${c.youtube || 0} YouTube`,
+    `Tracks ready to send instantly: ${(await env.OWNER.keys("fid:")).length}`,
+    `Searches cached: ${(await env.OWNER.keys("q:")).length}`,
+    "",
+    queries.length ? "Your top searches:" : "No searches picked from yet.",
+    ...queries.map(([q, v], i) => `${i + 1}. ${q} (${v.n})`),
+    "",
+    `Storage channel: ${(await env.OWNER.get("storage_chat")) ? "connected" : "not connected"}`,
+    `Last warm-up: ${(await env.OWNER.get("warm:last")) || "not yet"}`,
+    `Running for: ${ago(Date.now() - STARTED)}`,
+  ];
+  await say(env, msg.chat.id, lines.join("\n"));
+}
+
 // "/warm" from the owner runs the night warm-up right away.
 async function warmNow(msg) {
   if (String(msg.from?.id) !== (await env.OWNER.get("owner"))) return handle(msg, env);
@@ -279,9 +321,16 @@ async function main() {
       }
       for (const u of res.result) {
         offset = u.update_id + 1;
-        if (u.chosen_inline_result) rememberQuery(u.chosen_inline_result.query).catch(() => {});
+        if (u.chosen_inline_result) {
+          rememberQuery(u.chosen_inline_result.query).catch(() => {});
+          count("inline").catch(() => {});
+        }
+        const link = u.message && findLink(u.message.text || u.message.caption || "");
+        if (link && String(u.message.from?.id) === (await env.OWNER.get("owner"))) count(link.kind).catch(() => {});
         const job = u.message?.text === "/warm"
           ? warmNow(u.message)
+          : u.message?.text === "/stats"
+          ? statsNow(u.message)
           : u.message
           ? handle(u.message, env)
           : u.inline_query
