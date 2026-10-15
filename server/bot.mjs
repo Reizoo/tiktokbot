@@ -104,7 +104,7 @@ async function prefetch(tracks, q) {
 
 // Telegram only lists audio it already has, so each track is uploaded once and its file_id is kept.
 // Uploads go to a private storage channel (the bot is added there as an admin, see onMembership), or
-// to the owner's chat until one is connected, and are deleted straight after either way.
+// to the owner's chat until one is connected (deleted straight after there).
 async function cacheTrack(trackId, owner, gen, rank) {
   const storage = (await env.OWNER.get("storage_chat")) || owner;
   try {
@@ -131,8 +131,9 @@ async function cacheTrack(trackId, owner, gen, rank) {
     if (!sent.ok) return log("cache upload refused", trackId, sent.description);
     await env.OWNER.put(`fid:${trackId}`, sent.result.audio.file_id);
     log(`cached ${trackId}: download ${t1 - t0} ms, queue ${t2 - t1} ms, upload ${Date.now() - t2} ms, ${(t.body.size / 1048576).toFixed(1)} MB`);
-    // The file stays on Telegram's servers after the message is gone, so the storage stays empty.
-    tg(env, "deleteMessage", { chat_id: storage, message_id: sent.result.message_id }); // no need to wait
+    // Tracks stay in the storage channel as a library. Only the fallback copies in the owner's own
+    // chat are deleted (the file stays on Telegram's servers after the message is gone).
+    if (storage === owner) tg(env, "deleteMessage", { chat_id: owner, message_id: sent.result.message_id }); // no need to wait
   } catch (e) {
     log("cache failed", trackId, e.message);
   }
