@@ -22,7 +22,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PYTHON = process.env.PYTHON || path.join(ROOT, ".venv", "Scripts", "python.exe");
 const PLACEHOLDER_ORIGIN = "https://tiktok-bot.didigotreizoo.workers.dev"; // the Worker still serves /placeholder.mp3
 const PREFETCH_COUNT = 3; // top results downloaded per search
-const PREFETCH_BUDGET_MS = 6000; // the longest a search waits before answering
+const ANSWER_DEADLINE_MS = 4500; // answer within this long of the query arriving, whatever is ready (Telegram drops slow answers)
 const ANSWER_WHEN_READY = 2; // answer once the best this many results are ready; the rest keep downloading
 const TYPING_PAUSE_MS = 300; // Telegram sends a query per keystroke; only the last one in a pause is worked on
 const UPLOAD_SLOTS = 2; // uploads to Telegram at once; more just queue up on Telegram's side
@@ -98,8 +98,10 @@ async function prefetch(tracks, q) {
   );
   // Answer once the best results are ready (or time is up), so a weaker track that happened to be
   // cached from an earlier search cannot stand in for them. The rest keep downloading for next time.
+  // The clock starts when the query arrived (q._t0), so a slow search can't push the answer past the deadline.
   const t0 = Date.now();
-  await Promise.race([Promise.allSettled(top.slice(0, ANSWER_WHEN_READY).map((x) => x.job)), sleep(PREFETCH_BUDGET_MS)]);
+  const left = Math.max(0, (q._t0 || t0) + ANSWER_DEADLINE_MS - t0);
+  await Promise.race([Promise.allSettled(top.slice(0, ANSWER_WHEN_READY).map((x) => x.job)), sleep(left)]);
   log(`inline "${q.query}": ${top.filter((x) => x.cached).length} cached, answered after ${Date.now() - t0} ms`);
 }
 
@@ -334,7 +336,7 @@ async function main() {
           : u.message
           ? handle(u.message, env)
           : u.inline_query
-            ? inlineSearch(u.inline_query, env, PLACEHOLDER_ORIGIN)
+            ? inlineSearch(Object.assign(u.inline_query, { _t0: Date.now() }), env, PLACEHOLDER_ORIGIN)
             : u.chosen_inline_result
               ? inlineChosen(u.chosen_inline_result, env)
               : u.my_chat_member
