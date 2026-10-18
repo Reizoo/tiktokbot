@@ -169,7 +169,11 @@ const SEARCH_AGAIN = { inline_keyboard: [[{ text: "🔍", switch_inline_query_cu
 
 async function inlineSearch(q, env, origin) {
   const owner = await env.OWNER.get("owner");
-  const answer = (results, extra = {}) => tg(env, "answerInlineQuery", { inline_query_id: q.id, results, cache_time: 300, is_personal: true, ...extra });
+  const answer = async (results, extra = {}) => {
+    const res = await tg(env, "answerInlineQuery", { inline_query_id: q.id, results, cache_time: 300, is_personal: true, ...extra });
+    if (!res.ok) console.log("answerInlineQuery refused", res.status, (await res.clone().text()).slice(0, 200));
+    return res;
+  };
   if (!owner || String(q.from.id) !== owner) return answer([], { cache_time: 3600 });
   const query = q.query.trim();
   if (query.length < 2) return answer([]);
