@@ -211,8 +211,9 @@ async function inlineSearch(q, env, origin) {
   }
 }
 
-// Telegram can't take a fresh upload into an inline message, so the track goes to the owner's own chat
-// first (silently, deleted straight after) to get a file_id, and the placeholder is then edited into it.
+// Telegram can't take a fresh upload into an inline message, so the track is uploaded first to get a
+// file_id, and the placeholder is then edited into it. The upload goes to the private storage channel
+// when one is connected (and stays there), otherwise to the owner's own chat (deleted straight after).
 // The file_id is kept in KV (fid:<track id>), so the same track is sent instantly next time.
 // Needs inline feedback switched on in @BotFather (/setinlinefeedback).
 async function inlineChosen(r, env) {
@@ -222,8 +223,9 @@ async function inlineChosen(r, env) {
   try {
     const t = await fetchSoundCloudById(r.result_id, env.OWNER);
     if (t.body.size > MAX_BYTES) throw new Error("over 50 MB");
+    const storage = (await env.OWNER.get("storage_chat")) || owner;
     const form = new FormData();
-    form.append("chat_id", owner);
+    form.append("chat_id", storage);
     form.append("disable_notification", "true");
     form.append("title", t.title.slice(0, 64));
     if (t.performer) form.append("performer", t.performer.slice(0, 64));
@@ -233,7 +235,7 @@ async function inlineChosen(r, env) {
     const sent = await (await upload(env, "sendAudio", form)).json();
     if (!sent.ok) throw new Error(`upload refused: ${sent.description}`);
     await env.OWNER.put(`fid:${r.result_id}`, sent.result.audio.file_id);
-    await tg(env, "deleteMessage", { chat_id: owner, message_id: sent.result.message_id });
+    if (storage === owner) await tg(env, "deleteMessage", { chat_id: owner, message_id: sent.result.message_id });
     const res = await (await tg(env, "editMessageMedia", {
       inline_message_id: r.inline_message_id,
       media: { type: "audio", media: sent.result.audio.file_id, title: t.title.slice(0, 64), performer: t.performer.slice(0, 64), duration: t.duration },
