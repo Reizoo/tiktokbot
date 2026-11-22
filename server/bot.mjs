@@ -206,6 +206,29 @@ async function onMembership(m) {
   }
 }
 
+// The store on a new machine starts empty, and a channel where the bot is already an admin sends no
+// membership update. So the owner can also connect it by forwarding any post from that channel to the bot.
+async function onForward(msg) {
+  const chat = msg.forward_origin?.type === "channel" ? msg.forward_origin.chat : msg.forward_from_chat;
+  const owner = await env.OWNER.get("owner");
+  if (!chat || chat.type !== "channel" || String(msg.from?.id) !== owner) return handle(msg, env);
+  const me = await (await tg(env, "getMe", {})).json();
+  const member = await (await tg(env, "getChatMember", { chat_id: chat.id, user_id: me.result.id })).json();
+  if (!member.ok || member.result.status !== "administrator") {
+    return say(env, owner, `I'm not an admin in "${chat.title}" yet. Add me there as an admin (with "Post messages"), then forward a post again.`);
+  }
+  await env.OWNER.put("storage_chat", String(chat.id));
+  log("storage channel connected (forward)", chat.id);
+  // Tracks cached before the channel was connected only exist as file_ids: post them there so the library is complete.
+  let copied = 0;
+  for (const key of await env.OWNER.keys("fid:")) {
+    const r = await (await tg(env, "sendAudio", { chat_id: chat.id, audio: await env.OWNER.get(key), disable_notification: true })).json();
+    if (r.ok) copied++;
+    await sleep(1100); // stay under Telegram's ~1 message/second per channel
+  }
+  await say(env, owner, `Storage channel "${chat.title}" connected. New tracks go there now${copied ? `, and ${copied} already cached ones were posted there too` : ""}.`);
+}
+
 // ---------- YouTube ----------
 
 function runYtdl(url, folder) {
@@ -333,6 +356,8 @@ async function main() {
           ? warmNow(u.message)
           : u.message?.text === "/stats"
           ? statsNow(u.message)
+          : u.message && (u.message.forward_origin?.type === "channel" || u.message.forward_from_chat)
+          ? onForward(u.message)
           : u.message
           ? handle(u.message, env)
           : u.inline_query
