@@ -11,12 +11,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { handle, inlineSearch, inlineChosen, tg, say, upload, addArtwork, MAX_BYTES } from "../worker/index.js";
 import { fetchSoundCloudById, searchSoundCloud } from "../worker/soundcloud.js";
 import { findLink } from "../worker/links.js";
 import { fileStore } from "./store.mjs";
+import { tiktokFormats } from "./tiktok-formats.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PYTHON = process.env.PYTHON || path.join(ROOT, ".venv", "Scripts", "python.exe");
@@ -50,6 +51,10 @@ const env = {
 };
 const log = (...a) => console.log(new Date().toISOString(), ...a);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ffmpeg ships inside the Python venv (imageio-ffmpeg), the same one yt-dlp uses.
+const FFMPEG = process.env.FFMPEG || execFileSync(PYTHON, ["-c", "import imageio_ffmpeg;print(imageio_ffmpeg.get_ffmpeg_exe())"], { windowsHide: true }).toString().trim();
+const tiktok = tiktokFormats(env, { ffmpeg: FFMPEG, log });
 
 // ---------- inline prefetch ----------
 
@@ -338,7 +343,7 @@ async function main() {
   let offset = 0;
   for (;;) {
     try {
-      const res = await (await tg(env, "getUpdates", { offset, timeout: 50, allowed_updates: ["message", "inline_query", "chosen_inline_result", "my_chat_member"] })).json();
+      const res = await (await tg(env, "getUpdates", { offset, timeout: 50, allowed_updates: ["message", "inline_query", "chosen_inline_result", "my_chat_member", "callback_query"] })).json();
       if (!res.ok) {
         log("getUpdates refused:", res.description);
         await sleep(5000);
@@ -358,6 +363,10 @@ async function main() {
           ? statsNow(u.message)
           : u.message && (u.message.forward_origin?.type === "channel" || u.message.forward_from_chat)
           ? onForward(u.message)
+          : link?.kind === "tiktok" && String(u.message.from?.id) === (await env.OWNER.get("owner"))
+          ? tiktok.ask(u.message, link.url)
+          : u.callback_query?.data?.startsWith("tt:") && String(u.callback_query.from?.id) === (await env.OWNER.get("owner"))
+          ? tiktok.onButton(u.callback_query)
           : u.message
           ? handle(u.message, env)
           : u.inline_query
